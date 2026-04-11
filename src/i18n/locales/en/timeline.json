@@ -5,14 +5,20 @@
 		"addTrim": "Add Trim (T)",
 		"addAnnotation": "Add Annotation (A)",
 		"addBlur": "Add Blur (B)",
-		"addSpeed": "Add Speed (S)"
+		"addSpeed": "Add Speed (S)",
+		"addWebcam": "Add Webcam Segment",
+		"addWebcamKeyframe": "Add Webcam Keyframe",
+		"deleteWebcamSelection": "Delete Selected Webcam Item",
+		"generateWebcamFromAudio": "Generate Webcam Visibility From Audio",
+		"analyzingWebcamAudio": "Analyzing Recording Audio"
 	},
 	"hints": {
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
 		"pressBlur": "Press B to add blur region",
-		"pressSpeed": "Press S to add speed"
+		"pressSpeed": "Press S to add speed",
+		"pressWebcam": "Add or generate webcam visibility segments"
 	},
 	"labels": {
 		"pan": "Pan",
@@ -20,6 +26,7 @@
 		"zoomItem": "Zoom {{index}}",
 		"trimItem": "Trim {{index}}",
 		"speedItem": "Speed {{index}}",
+		"webcamItem": "Webcam {{index}}",
 		"annotationItem": "Annotation",
 		"blurItem": "Blur {{index}}",
 		"imageItem": "Image",

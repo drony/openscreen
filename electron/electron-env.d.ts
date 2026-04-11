@@ -70,6 +70,12 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		getMicrophoneTelemetry: (videoPath?: string) => Promise<{
+			success: boolean;
+			samples: Array<{ timeMs: number; level: number }>;
+			message?: string;
+			error?: string;
+		}>;
 		onStopRecordingFromTray: (callback: () => void) => () => void;
 		openExternalUrl: (url: string) => Promise<{ success: boolean; error?: string }>;
 		saveExportedVideo: (

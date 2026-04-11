@@ -54,11 +54,69 @@ import type {
 	PlaybackSpeed,
 	WebcamLayoutPreset,
 	WebcamMaskShape,
+	WebcamShadowPreset,
 	WebcamSizePreset,
+	WebcamTrack,
+	WebcamVisibilityAnimation,
 	ZoomDepth,
 	ZoomFocusMode,
 } from "./types";
-import { DEFAULT_WEBCAM_SIZE_PRESET, MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "./types";
+import {
+	DEFAULT_WEBCAM_BORDER_COLOR,
+	DEFAULT_WEBCAM_BORDER_WIDTH,
+	DEFAULT_WEBCAM_SHADOW_PRESET,
+	DEFAULT_WEBCAM_SIZE_PRESET,
+	MAX_PLAYBACK_SPEED,
+	MAX_WEBCAM_BORDER_WIDTH,
+	SPEED_OPTIONS,
+} from "./types";
+import {
+	DEFAULT_MICROPHONE_VISIBILITY_CONFIG,
+	type GenerateWebcamSegmentsFromMicConfig,
+} from "./webcamAutomation";
+
+const MIC_AUTOMATION_PRESETS: Array<{
+	id: "focused" | "balanced" | "responsive";
+	config: GenerateWebcamSegmentsFromMicConfig;
+}> = [
+	{
+		id: "focused",
+		config: {
+			threshold: 40,
+			attackMs: 220,
+			holdMs: 240,
+			releaseMs: 120,
+			minimumVisibleDurationMs: 420,
+		},
+	},
+	{
+		id: "balanced",
+		config: DEFAULT_MICROPHONE_VISIBILITY_CONFIG,
+	},
+	{
+		id: "responsive",
+		config: {
+			threshold: 22,
+			attackMs: 80,
+			holdMs: 180,
+			releaseMs: 90,
+			minimumVisibleDurationMs: 260,
+		},
+	},
+];
+
+function isSameMicAutomationConfig(
+	left: GenerateWebcamSegmentsFromMicConfig,
+	right: GenerateWebcamSegmentsFromMicConfig,
+) {
+	return (
+		left.threshold === right.threshold &&
+		left.attackMs === right.attackMs &&
+		left.holdMs === right.holdMs &&
+		left.releaseMs === right.releaseMs &&
+		left.minimumVisibleDurationMs === right.minimumVisibleDurationMs
+	);
+}
 
 function CustomSpeedInput({
 	value,
@@ -225,9 +283,28 @@ interface SettingsPanelProps {
 	onWebcamLayoutPresetChange?: (preset: WebcamLayoutPreset) => void;
 	webcamMaskShape?: import("./types").WebcamMaskShape;
 	onWebcamMaskShapeChange?: (shape: import("./types").WebcamMaskShape) => void;
+	webcamBorderWidth?: number;
+	onWebcamBorderWidthChange?: (width: number) => void;
+	onWebcamBorderWidthCommit?: () => void;
+	webcamBorderColor?: string;
+	onWebcamBorderColorChange?: (color: string) => void;
 	webcamSizePreset?: WebcamSizePreset;
 	onWebcamSizePresetChange?: (size: WebcamSizePreset) => void;
 	onWebcamSizePresetCommit?: () => void;
+	webcamShadowPreset?: WebcamShadowPreset;
+	onWebcamShadowPresetChange?: (preset: WebcamShadowPreset) => void;
+	webcamTrack?: WebcamTrack | null;
+	selectedWebcamSegmentId?: string | null;
+	selectedWebcamKeyframeId?: string | null;
+	hasMicrophoneTelemetry?: boolean;
+	isMicrophoneTelemetryLoading?: boolean;
+	micAutomationConfig?: GenerateWebcamSegmentsFromMicConfig;
+	onMicAutomationConfigChange?: (config: GenerateWebcamSegmentsFromMicConfig) => void;
+	onWebcamAnchorSelect?: (
+		anchor: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center",
+	) => void;
+	onWebcamEnterAnimationChange?: (animation: WebcamVisibilityAnimation) => void;
+	onWebcamExitAnimationChange?: (animation: WebcamVisibilityAnimation) => void;
 }
 
 export default SettingsPanel;
@@ -306,14 +383,32 @@ export function SettingsPanel({
 	onWebcamLayoutPresetChange,
 	webcamMaskShape = "rectangle",
 	onWebcamMaskShapeChange,
+	webcamBorderWidth = DEFAULT_WEBCAM_BORDER_WIDTH,
+	onWebcamBorderWidthChange,
+	onWebcamBorderWidthCommit,
+	webcamBorderColor = DEFAULT_WEBCAM_BORDER_COLOR,
+	onWebcamBorderColorChange,
 	webcamSizePreset = DEFAULT_WEBCAM_SIZE_PRESET,
 	onWebcamSizePresetChange,
 	onWebcamSizePresetCommit,
+	webcamShadowPreset = DEFAULT_WEBCAM_SHADOW_PRESET,
+	onWebcamShadowPresetChange,
+	webcamTrack,
+	selectedWebcamSegmentId,
+	selectedWebcamKeyframeId,
+	hasMicrophoneTelemetry = false,
+	isMicrophoneTelemetryLoading = false,
+	micAutomationConfig = DEFAULT_MICROPHONE_VISIBILITY_CONFIG,
+	onMicAutomationConfigChange,
+	onWebcamAnchorSelect,
+	onWebcamEnterAnimationChange,
+	onWebcamExitAnimationChange,
 }: SettingsPanelProps) {
 	const t = useScopedT("settings");
 	const [wallpaperPaths, setWallpaperPaths] = useState<string[]>([]);
 	const [customImages, setCustomImages] = useState<string[]>([]);
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const [showMicAutomationAdvanced, setShowMicAutomationAdvanced] = useState(false);
 
 	useEffect(() => {
 		let mounted = true;
@@ -347,6 +442,18 @@ export function SettingsPanel({
 		"#607D8B",
 		"#795548",
 	];
+	const webcamEnterAnimation = webcamTrack?.enterAnimation ?? "scale+fade";
+	const webcamExitAnimation = webcamTrack?.exitAnimation ?? "scale+fade";
+	const selectedMicAutomationPreset =
+		MIC_AUTOMATION_PRESETS.find((preset) =>
+			isSameMicAutomationConfig(preset.config, micAutomationConfig),
+		)?.id ?? null;
+	const updateMicAutomationConfig = useCallback(
+		(nextConfig: GenerateWebcamSegmentsFromMicConfig) => {
+			onMicAutomationConfigChange?.(nextConfig);
+		},
+		[onMicAutomationConfigChange],
+	);
 
 	const [selectedColor, setSelectedColor] = useState("#ADADAD");
 	const [gradient, setGradient] = useState<string>(GRADIENTS[0]);
@@ -893,6 +1000,374 @@ export function SettingsPanel({
 											step={1}
 											className="w-full"
 										/>
+									</div>
+								)}
+								{webcamLayoutPreset === "picture-in-picture" && (
+									<div className="grid grid-cols-2 gap-2 mt-2">
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between mb-1.5">
+												<div className="text-[10px] font-medium text-slate-300">
+													{t("layout.webcamBorderWidth")}
+												</div>
+												<div className="text-[10px] font-medium text-slate-400">
+													{webcamBorderWidth}px
+												</div>
+											</div>
+											<Slider
+												value={[webcamBorderWidth]}
+												onValueChange={(values) => onWebcamBorderWidthChange?.(values[0])}
+												onValueCommit={() => onWebcamBorderWidthCommit?.()}
+												min={0}
+												max={MAX_WEBCAM_BORDER_WIDTH}
+												step={1}
+												className="w-full"
+											/>
+										</div>
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="text-[10px] font-medium text-slate-300 mb-1.5">
+												{t("layout.webcamBorderColor")}
+											</div>
+											<label className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2 py-2 cursor-pointer">
+												<span
+													className="h-4 w-4 rounded-full border border-white/20 shrink-0"
+													style={{ backgroundColor: webcamBorderColor }}
+												/>
+												<input
+													type="color"
+													value={webcamBorderColor}
+													onChange={(event) => onWebcamBorderColorChange?.(event.target.value)}
+													className="h-6 w-8 rounded bg-transparent cursor-pointer"
+												/>
+												<span className="text-[10px] font-mono uppercase text-slate-400 truncate">
+													{webcamBorderColor}
+												</span>
+											</label>
+										</div>
+									</div>
+								)}
+								{webcamLayoutPreset === "picture-in-picture" && (
+									<div className="mt-2 space-y-2">
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="text-[10px] font-medium text-slate-300 mb-1.5">
+												{t("layout.webcamSizePresets")}
+											</div>
+											<div className="grid grid-cols-3 gap-1.5">
+												{[
+													{ label: t("layout.sizeSmall"), value: 18 },
+													{ label: t("layout.sizeMedium"), value: 25 },
+													{ label: t("layout.sizeLarge"), value: 34 },
+												].map((preset) => (
+													<Button
+														key={preset.label}
+														type="button"
+														variant="outline"
+														onClick={() => {
+															onWebcamSizePresetChange?.(preset.value);
+															onWebcamSizePresetCommit?.();
+														}}
+														className={cn(
+															"h-8 text-[10px] border-white/10 bg-black/20 hover:bg-white/10",
+															Math.round(webcamSizePreset) === preset.value &&
+																"border-[#34B27B] text-[#34B27B]",
+														)}
+													>
+														{preset.label}
+													</Button>
+												))}
+											</div>
+										</div>
+
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="text-[10px] font-medium text-slate-300 mb-1.5">
+												{t("layout.webcamShadow")}
+											</div>
+											<div className="grid grid-cols-3 gap-1.5">
+												{(
+													[
+														{ value: "off", label: t("layout.shadowOff") },
+														{ value: "soft", label: t("layout.shadowSoft") },
+														{ value: "strong", label: t("layout.shadowStrong") },
+													] as Array<{ value: WebcamShadowPreset; label: string }>
+												).map((option) => (
+													<Button
+														key={option.value}
+														type="button"
+														variant="outline"
+														onClick={() => onWebcamShadowPresetChange?.(option.value)}
+														className={cn(
+															"h-8 text-[10px] border-white/10 bg-black/20 hover:bg-white/10",
+															webcamShadowPreset === option.value &&
+																"border-[#34B27B] text-[#34B27B]",
+														)}
+													>
+														{option.label}
+													</Button>
+												))}
+											</div>
+										</div>
+
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between gap-2 mb-1.5">
+												<div>
+													<div className="text-[10px] font-medium text-slate-300">
+														{t("layout.webcamAutomation")}
+													</div>
+													<div className="text-[9px] text-slate-500">
+														{selectedWebcamKeyframeId
+															? t("layout.editingKeyframe")
+															: selectedWebcamSegmentId
+																? t("layout.editingSegment")
+																: t("layout.editingBaseTrack")}
+													</div>
+												</div>
+												<div className="text-[9px] text-slate-500">
+													{webcamTrack?.segments.length ?? 0} {t("layout.segmentCount")}
+												</div>
+											</div>
+											<div className="text-[10px] font-medium text-slate-300 mb-1.5">
+												{t("layout.snapAnchors")}
+											</div>
+											<div className="grid grid-cols-3 gap-1.5 mb-2">
+												{[
+													{ id: "top-left", label: t("layout.anchorTopLeft") },
+													{ id: "top-right", label: t("layout.anchorTopRight") },
+													{ id: "center", label: t("layout.anchorCenter") },
+													{ id: "bottom-left", label: t("layout.anchorBottomLeft") },
+													{ id: "bottom-right", label: t("layout.anchorBottomRight") },
+												].map((anchor) => (
+													<Button
+														key={anchor.id}
+														type="button"
+														variant="outline"
+														onClick={() =>
+															onWebcamAnchorSelect?.(
+																anchor.id as
+																	| "top-left"
+																	| "top-right"
+																	| "bottom-left"
+																	| "bottom-right"
+																	| "center",
+															)
+														}
+														className="h-8 text-[10px] border-white/10 bg-black/20 hover:bg-white/10"
+													>
+														{anchor.label}
+													</Button>
+												))}
+											</div>
+
+											<div className="grid grid-cols-2 gap-2">
+												<div className="space-y-1">
+													<div className="text-[10px] font-medium text-slate-300">
+														{t("layout.enterAnimation")}
+													</div>
+													<Select
+														value={webcamEnterAnimation}
+														onValueChange={(value: WebcamVisibilityAnimation) =>
+															onWebcamEnterAnimationChange?.(value)
+														}
+													>
+														<SelectTrigger className="h-8 bg-black/20 border-white/10 text-xs">
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															<SelectItem value="none">{t("layout.animationNone")}</SelectItem>
+															<SelectItem value="fade">{t("layout.animationFade")}</SelectItem>
+															<SelectItem value="scale+fade">
+																{t("layout.animationScaleFade")}
+															</SelectItem>
+														</SelectContent>
+													</Select>
+												</div>
+												<div className="space-y-1">
+													<div className="text-[10px] font-medium text-slate-300">
+														{t("layout.exitAnimation")}
+													</div>
+													<Select
+														value={webcamExitAnimation}
+														onValueChange={(value: WebcamVisibilityAnimation) =>
+															onWebcamExitAnimationChange?.(value)
+														}
+													>
+														<SelectTrigger className="h-8 bg-black/20 border-white/10 text-xs">
+															<SelectValue />
+														</SelectTrigger>
+														<SelectContent>
+															<SelectItem value="none">{t("layout.animationNone")}</SelectItem>
+															<SelectItem value="fade">{t("layout.animationFade")}</SelectItem>
+															<SelectItem value="scale+fade">
+																{t("layout.animationScaleFade")}
+															</SelectItem>
+														</SelectContent>
+													</Select>
+												</div>
+											</div>
+										</div>
+
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="mb-2">
+												<div className="text-[10px] font-medium text-slate-300">
+													{t("layout.micAutomation")}
+												</div>
+												<div className="text-[9px] text-slate-500">
+													{isMicrophoneTelemetryLoading
+														? t("layout.micAutomationLoading")
+														: hasMicrophoneTelemetry
+															? t("layout.micAutomationReady")
+															: t("layout.micAutomationUnavailable")}
+												</div>
+											</div>
+											<div className="space-y-2">
+												<div>
+													<div className="text-[10px] font-medium text-slate-300 mb-1.5">
+														{t("layout.micQuickPresets")}
+													</div>
+													<div className="grid grid-cols-3 gap-1.5">
+														{MIC_AUTOMATION_PRESETS.map((preset) => (
+															<Button
+																key={preset.id}
+																type="button"
+																variant="outline"
+																onClick={() => updateMicAutomationConfig(preset.config)}
+																className={cn(
+																	"h-8 text-[10px] border-white/10 bg-black/20 hover:bg-white/10",
+																	selectedMicAutomationPreset === preset.id &&
+																		"border-[#34B27B] text-[#34B27B]",
+																)}
+															>
+																{t(
+																	`layout.micPreset${preset.id.charAt(0).toUpperCase()}${preset.id.slice(1)}`,
+																)}
+															</Button>
+														))}
+													</div>
+												</div>
+
+												<div className="grid grid-cols-2 gap-1.5">
+													<div className="rounded-lg border border-white/10 bg-black/20 px-2 py-1.5">
+														<div className="text-[9px] text-slate-500">
+															{t("layout.micThreshold")}
+														</div>
+														<div className="text-[11px] font-semibold text-slate-200">
+															{micAutomationConfig.threshold}
+														</div>
+													</div>
+													<div className="rounded-lg border border-white/10 bg-black/20 px-2 py-1.5">
+														<div className="text-[9px] text-slate-500">
+															{t("layout.micMinimumVisible")}
+														</div>
+														<div className="text-[11px] font-semibold text-slate-200">
+															{micAutomationConfig.minimumVisibleDurationMs} ms
+														</div>
+													</div>
+												</div>
+
+												<Button
+													type="button"
+													variant="outline"
+													onClick={() => setShowMicAutomationAdvanced((prev) => !prev)}
+													className="h-8 w-full justify-between text-[10px] border-white/10 bg-black/20 hover:bg-white/10"
+												>
+													<span>{t("layout.micAdvanced")}</span>
+													<span className="text-slate-500">
+														{showMicAutomationAdvanced
+															? t("layout.micHideAdvanced")
+															: t("layout.micShowAdvanced")}
+													</span>
+												</Button>
+
+												{showMicAutomationAdvanced && (
+													<div className="space-y-2 pt-1">
+														{[
+															{
+																key: "threshold",
+																label: t("layout.micThreshold"),
+																value: micAutomationConfig.threshold,
+																min: 0,
+																max: 100,
+																step: 1,
+																update: (value: number) =>
+																	updateMicAutomationConfig({
+																		...micAutomationConfig,
+																		threshold: value,
+																	}),
+															},
+															{
+																key: "attack",
+																label: t("layout.micAttack"),
+																value: micAutomationConfig.attackMs,
+																min: 0,
+																max: 1000,
+																step: 20,
+																update: (value: number) =>
+																	updateMicAutomationConfig({
+																		...micAutomationConfig,
+																		attackMs: value,
+																	}),
+															},
+															{
+																key: "hold",
+																label: t("layout.micHold"),
+																value: micAutomationConfig.holdMs,
+																min: 0,
+																max: 1500,
+																step: 20,
+																update: (value: number) =>
+																	updateMicAutomationConfig({
+																		...micAutomationConfig,
+																		holdMs: value,
+																	}),
+															},
+															{
+																key: "release",
+																label: t("layout.micRelease"),
+																value: micAutomationConfig.releaseMs,
+																min: 0,
+																max: 1500,
+																step: 20,
+																update: (value: number) =>
+																	updateMicAutomationConfig({
+																		...micAutomationConfig,
+																		releaseMs: value,
+																	}),
+															},
+															{
+																key: "minimum",
+																label: t("layout.micMinimumVisible"),
+																value: micAutomationConfig.minimumVisibleDurationMs,
+																min: 100,
+																max: 3000,
+																step: 50,
+																update: (value: number) =>
+																	updateMicAutomationConfig({
+																		...micAutomationConfig,
+																		minimumVisibleDurationMs: value,
+																	}),
+															},
+														].map((control) => (
+															<div key={control.key}>
+																<div className="flex items-center justify-between mb-1">
+																	<div className="text-[10px] font-medium text-slate-300">
+																		{control.label}
+																	</div>
+																	<span className="text-[10px] text-slate-500 font-mono">
+																		{control.value}
+																	</span>
+																</div>
+																<Slider
+																	value={[control.value]}
+																	onValueChange={(values) => control.update(values[0])}
+																	min={control.min}
+																	max={control.max}
+																	step={control.step}
+																	className="w-full [&_[role=slider]]:bg-[#34B27B] [&_[role=slider]]:border-[#34B27B] [&_[role=slider]]:h-3 [&_[role=slider]]:w-3"
+																/>
+															</div>
+														))}
+													</div>
+												)}
+											</div>
+										</div>
 									</div>
 								)}
 							</AccordionContent>

@@ -7,14 +7,19 @@ import type {
 	WebcamLayoutPreset,
 	WebcamMaskShape,
 	WebcamPosition,
+	WebcamShadowPreset,
 	WebcamSizePreset,
+	WebcamTrack,
 	ZoomRegion,
 } from "@/components/video-editor/types";
 import {
 	DEFAULT_CROP_REGION,
+	DEFAULT_WEBCAM_BORDER_COLOR,
+	DEFAULT_WEBCAM_BORDER_WIDTH,
 	DEFAULT_WEBCAM_LAYOUT_PRESET,
 	DEFAULT_WEBCAM_MASK_SHAPE,
 	DEFAULT_WEBCAM_POSITION,
+	DEFAULT_WEBCAM_SHADOW_PRESET,
 	DEFAULT_WEBCAM_SIZE_PRESET,
 } from "@/components/video-editor/types";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
@@ -36,8 +41,12 @@ export interface EditorState {
 	aspectRatio: AspectRatio;
 	webcamLayoutPreset: WebcamLayoutPreset;
 	webcamMaskShape: WebcamMaskShape;
+	webcamBorderWidth: number;
+	webcamBorderColor: string;
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
+	webcamShadowPreset: WebcamShadowPreset;
+	webcamTrack: WebcamTrack | null;
 }
 
 export const INITIAL_EDITOR_STATE: EditorState = {
@@ -55,8 +64,12 @@ export const INITIAL_EDITOR_STATE: EditorState = {
 	aspectRatio: "16:9",
 	webcamLayoutPreset: DEFAULT_WEBCAM_LAYOUT_PRESET,
 	webcamMaskShape: DEFAULT_WEBCAM_MASK_SHAPE,
+	webcamBorderWidth: DEFAULT_WEBCAM_BORDER_WIDTH,
+	webcamBorderColor: DEFAULT_WEBCAM_BORDER_COLOR,
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
+	webcamShadowPreset: DEFAULT_WEBCAM_SHADOW_PRESET,
+	webcamTrack: null,
 };
 
 type StateUpdate = Partial<EditorState> | ((prev: EditorState) => Partial<EditorState>);

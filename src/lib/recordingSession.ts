@@ -1,3 +1,5 @@
+import type { MicrophoneTelemetryPoint } from "@/components/video-editor/types";
+
 export interface ProjectMedia {
 	screenVideoPath: string;
 	webcamVideoPath?: string;
@@ -15,6 +17,7 @@ export interface RecordedVideoAssetInput {
 export interface StoreRecordedSessionInput {
 	screen: RecordedVideoAssetInput;
 	webcam?: RecordedVideoAssetInput;
+	microphoneTelemetry?: MicrophoneTelemetryPoint[];
 	createdAt?: number;
 }
 

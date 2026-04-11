@@ -5,14 +5,20 @@
 		"addTrim": "Ajouter une coupe (T)",
 		"addAnnotation": "Ajouter une annotation (A)",
 		"addSpeed": "Ajouter une vitesse (S)",
-		"addBlur": "Ajouter un flou (B)"
+		"addBlur": "Ajouter un flou (B)",
+		"addWebcam": "Ajouter un segment webcam",
+		"addWebcamKeyframe": "Ajouter une image clé webcam",
+		"deleteWebcamSelection": "Supprimer l'élément webcam sélectionné",
+		"generateWebcamFromAudio": "Générer la visibilité webcam depuis l'audio",
+		"analyzingWebcamAudio": "Analyse de l'audio de l'enregistrement"
 	},
 	"hints": {
 		"pressZoom": "Appuyez sur Z pour ajouter un zoom",
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressBlur": "Appuyez sur B pour ajouter une zone de flou"
+		"pressBlur": "Appuyez sur B pour ajouter une zone de flou",
+		"pressWebcam": "Ajoutez ou générez des segments de visibilité de la webcam"
 	},
 	"labels": {
 		"pan": "Panoramique",
@@ -20,6 +26,7 @@
 		"zoomItem": "Zoom {{index}}",
 		"trimItem": "Coupe {{index}}",
 		"speedItem": "Vitesse {{index}}",
+		"webcamItem": "Webcam {{index}}",
 		"annotationItem": "Annotation",
 		"imageItem": "Image",
 		"emptyText": "Texte vide",

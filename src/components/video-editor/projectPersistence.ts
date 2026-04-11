@@ -15,13 +15,17 @@ import {
 	DEFAULT_CROP_REGION,
 	DEFAULT_FIGURE_DATA,
 	DEFAULT_PLAYBACK_SPEED,
+	DEFAULT_WEBCAM_BORDER_COLOR,
+	DEFAULT_WEBCAM_BORDER_WIDTH,
 	DEFAULT_WEBCAM_LAYOUT_PRESET,
 	DEFAULT_WEBCAM_MASK_SHAPE,
 	DEFAULT_WEBCAM_POSITION,
+	DEFAULT_WEBCAM_SHADOW_PRESET,
 	DEFAULT_WEBCAM_SIZE_PRESET,
 	DEFAULT_ZOOM_DEPTH,
 	MAX_BLUR_INTENSITY,
 	MAX_PLAYBACK_SPEED,
+	MAX_WEBCAM_BORDER_WIDTH,
 	MIN_BLUR_INTENSITY,
 	MIN_PLAYBACK_SPEED,
 	type SpeedRegion,
@@ -29,19 +33,23 @@ import {
 	type WebcamLayoutPreset,
 	type WebcamMaskShape,
 	type WebcamPosition,
+	type WebcamShadowPreset,
 	type WebcamSizePreset,
+	type WebcamTrack,
 	type ZoomRegion,
 } from "./types";
+import { normalizeWebcamTrack } from "./webcamAutomation";
 
 const WALLPAPER_COUNT = 18;
 const VALID_BLUR_SHAPES = new Set(["rectangle", "oval", "freehand"] as const);
+const HEX_COLOR_REGEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 export const WALLPAPER_PATHS = Array.from(
 	{ length: WALLPAPER_COUNT },
 	(_, i) => `/wallpapers/wallpaper${i + 1}.jpg`,
 );
 
-export const PROJECT_VERSION = 2;
+export const PROJECT_VERSION = 3;
 
 export interface ProjectEditorState {
 	wallpaper: string;
@@ -58,8 +66,12 @@ export interface ProjectEditorState {
 	aspectRatio: AspectRatio;
 	webcamLayoutPreset: WebcamLayoutPreset;
 	webcamMaskShape: WebcamMaskShape;
+	webcamBorderWidth: number;
+	webcamBorderColor: string;
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
+	webcamShadowPreset: WebcamShadowPreset;
+	webcamTrack: WebcamTrack | null;
 	exportQuality: ExportQuality;
 	exportFormat: ExportFormat;
 	gifFrameRate: GifFrameRate;
@@ -80,6 +92,12 @@ function isFiniteNumber(value: unknown): value is number {
 
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
+}
+
+function normalizeHexColor(value: unknown, fallback: string): string {
+	if (typeof value !== "string") return fallback;
+	const trimmed = value.trim();
+	return HEX_COLOR_REGEX.test(trimmed) ? trimmed.toLowerCase() : fallback;
 }
 
 function isFileUrl(value: string): boolean {
@@ -410,6 +428,10 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 			editor.webcamMaskShape === "rounded"
 				? editor.webcamMaskShape
 				: DEFAULT_WEBCAM_MASK_SHAPE,
+		webcamBorderWidth: isFiniteNumber(editor.webcamBorderWidth)
+			? clamp(editor.webcamBorderWidth, 0, MAX_WEBCAM_BORDER_WIDTH)
+			: DEFAULT_WEBCAM_BORDER_WIDTH,
+		webcamBorderColor: normalizeHexColor(editor.webcamBorderColor, DEFAULT_WEBCAM_BORDER_COLOR),
 		webcamSizePreset:
 			typeof editor.webcamSizePreset === "number" && isFiniteNumber(editor.webcamSizePreset)
 				? Math.max(10, Math.min(50, editor.webcamSizePreset))
@@ -424,6 +446,13 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 						cy: clamp((editor.webcamPosition as WebcamPosition).cy, 0, 1),
 					}
 				: DEFAULT_WEBCAM_POSITION,
+		webcamShadowPreset:
+			editor.webcamShadowPreset === "off" ||
+			editor.webcamShadowPreset === "soft" ||
+			editor.webcamShadowPreset === "strong"
+				? editor.webcamShadowPreset
+				: DEFAULT_WEBCAM_SHADOW_PRESET,
+		webcamTrack: normalizeWebcamTrack(editor.webcamTrack),
 		exportQuality:
 			editor.exportQuality === "medium" || editor.exportQuality === "source"
 				? editor.exportQuality

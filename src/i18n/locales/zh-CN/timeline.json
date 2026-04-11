@@ -5,14 +5,20 @@
 		"addTrim": "添加剪辑 (T)",
 		"addAnnotation": "添加标注 (A)",
 		"addSpeed": "添加速度 (S)",
-		"addBlur": "添加模糊 (B)"
+		"addBlur": "添加模糊 (B)",
+		"addWebcam": "添加摄像头片段",
+		"addWebcamKeyframe": "添加摄像头关键帧",
+		"deleteWebcamSelection": "删除选中的摄像头项",
+		"generateWebcamFromAudio": "根据音频生成摄像头显示",
+		"analyzingWebcamAudio": "正在分析录制音频"
 	},
 	"hints": {
 		"pressZoom": "按 Z 添加缩放",
 		"pressTrim": "按 T 添加剪辑",
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
-		"pressBlur": "按 B 添加模糊区域"
+		"pressBlur": "按 B 添加模糊区域",
+		"pressWebcam": "添加或根据麦克风生成摄像头可见片段"
 	},
 	"labels": {
 		"pan": "平移",
@@ -20,6 +26,7 @@
 		"zoomItem": "缩放 {{index}}",
 		"trimItem": "剪辑 {{index}}",
 		"speedItem": "速度 {{index}}",
+		"webcamItem": "摄像头 {{index}}",
 		"annotationItem": "标注",
 		"imageItem": "图片",
 		"emptyText": "空文本",

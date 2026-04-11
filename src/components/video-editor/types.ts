@@ -11,8 +11,15 @@ export const DEFAULT_WEBCAM_SIZE_PRESET: WebcamSizePreset = 25;
 export const DEFAULT_WEBCAM_LAYOUT_PRESET: WebcamLayoutPreset = "picture-in-picture";
 
 export type WebcamMaskShape = "rectangle" | "circle" | "square" | "rounded";
+export type WebcamShadowPreset = "off" | "soft" | "strong";
+export type WebcamVisibilityAnimation = "none" | "fade" | "scale+fade";
 
 export const DEFAULT_WEBCAM_MASK_SHAPE: WebcamMaskShape = "rectangle";
+export const DEFAULT_WEBCAM_BORDER_WIDTH = 0;
+export const MAX_WEBCAM_BORDER_WIDTH = 10;
+export const DEFAULT_WEBCAM_BORDER_COLOR = "#ffffff";
+export const DEFAULT_WEBCAM_SHADOW_PRESET: WebcamShadowPreset = "soft";
+export const DEFAULT_WEBCAM_VISIBILITY_ANIMATION: WebcamVisibilityAnimation = "scale+fade";
 
 export interface WebcamPosition {
 	cx: number; // normalized horizontal center (0-1)
@@ -20,6 +27,39 @@ export interface WebcamPosition {
 }
 
 export const DEFAULT_WEBCAM_POSITION: WebcamPosition | null = null;
+
+export interface WebcamAutomationValues {
+	position: WebcamPosition | null;
+	sizePreset: WebcamSizePreset;
+	borderWidth: number;
+	borderColor: string;
+	maskShape: WebcamMaskShape;
+	shadowPreset: WebcamShadowPreset;
+}
+
+export interface WebcamKeyframe {
+	id: string;
+	timeMs: number;
+	values: WebcamAutomationValues;
+}
+
+export interface WebcamSegment {
+	id: string;
+	startMs: number;
+	endMs: number;
+}
+
+export interface WebcamTrack {
+	segments: WebcamSegment[];
+	keyframes: WebcamKeyframe[];
+	enterAnimation: WebcamVisibilityAnimation;
+	exitAnimation: WebcamVisibilityAnimation;
+}
+
+export interface MicrophoneTelemetryPoint {
+	timeMs: number;
+	level: number;
+}
 
 export interface ZoomFocus {
 	cx: number; // normalized horizontal center (0-1)

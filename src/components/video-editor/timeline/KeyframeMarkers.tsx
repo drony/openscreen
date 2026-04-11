@@ -11,8 +11,10 @@ interface KeyframeMarkersProps {
 	selectedKeyframeId: string | null;
 	setSelectedKeyframeId: (id: string | null) => void;
 	onKeyframeMove: (id: string, newTime: number) => void;
+	onKeyframeMoveEnd?: () => void;
 	videoDurationMs: number;
 	timelineRef: React.RefObject<HTMLDivElement>;
+	topOffset?: number;
 }
 
 const KeyframeMarkers: React.FC<KeyframeMarkersProps> = ({
@@ -20,8 +22,10 @@ const KeyframeMarkers: React.FC<KeyframeMarkersProps> = ({
 	selectedKeyframeId,
 	setSelectedKeyframeId,
 	onKeyframeMove,
+	onKeyframeMoveEnd,
 	videoDurationMs,
 	timelineRef,
+	topOffset = 8,
 }) => {
 	const { sidebarWidth, range, valueToPixels, pixelsToValue } = useTimelineContext();
 	const [draggingKeyframeId, setDraggingKeyframeId] = useState<string | null>(null);
@@ -44,6 +48,7 @@ const KeyframeMarkers: React.FC<KeyframeMarkersProps> = ({
 		const handleMouseUp = () => {
 			setDraggingKeyframeId(null);
 			document.body.style.cursor = "";
+			onKeyframeMoveEnd?.();
 		};
 
 		window.addEventListener("mousemove", handleMouseMove);
@@ -58,6 +63,7 @@ const KeyframeMarkers: React.FC<KeyframeMarkersProps> = ({
 	}, [
 		draggingKeyframeId,
 		onKeyframeMove,
+		onKeyframeMoveEnd,
 		timelineRef,
 		sidebarWidth,
 		range.start,
@@ -75,8 +81,9 @@ const KeyframeMarkers: React.FC<KeyframeMarkersProps> = ({
 				return (
 					<div
 						key={kf.id}
-						className={`absolute top-8 cursor-grab active:cursor-grabbing ${isSelected ? "ring-2 ring-[#34B27B]" : ""}`}
+						className={`absolute cursor-grab active:cursor-grabbing ${isSelected ? "ring-2 ring-[#34B27B]" : ""}`}
 						style={{
+							top: topOffset,
 							left: `${sidebarWidth + offset - 8}px`,
 							zIndex: isDragging ? 50 : 40,
 							transition: isDragging ? "none" : "left 0.1s ease-out",

@@ -20,7 +20,6 @@ import {
 } from "react";
 import { getAssetPath } from "@/lib/assetPath";
 import {
-	getWebcamLayoutCssBoxShadow,
 	type Size,
 	type StyledRenderRect,
 	type WebcamLayoutPreset,
@@ -65,16 +64,24 @@ import {
 	createMotionBlurState,
 	type MotionBlurState,
 } from "./videoPlayback/zoomTransform";
+import { getWebcamShadowCssBoxShadow } from "./webcamAutomation";
 
 interface VideoPlaybackProps {
 	videoPath: string;
 	webcamVideoPath?: string;
 	webcamLayoutPreset: WebcamLayoutPreset;
 	webcamMaskShape?: import("./types").WebcamMaskShape;
+	webcamBorderWidth?: number;
+	webcamBorderColor?: string;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
+	webcamShadowPreset?: import("./types").WebcamShadowPreset;
+	webcamVisible?: boolean;
+	webcamOpacity?: number;
+	webcamScale?: number;
 	onWebcamPositionChange?: (position: { cx: number; cy: number }) => void;
 	onWebcamPositionDragEnd?: () => void;
+	onResolvedWebcamPositionChange?: (position: { cx: number; cy: number } | null) => void;
 	onDurationChange: (duration: number) => void;
 	onTimeUpdate: (time: number) => void;
 	currentTime: number;
@@ -129,10 +136,17 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			webcamVideoPath,
 			webcamLayoutPreset,
 			webcamMaskShape,
+			webcamBorderWidth = 0,
+			webcamBorderColor = "#ffffff",
 			webcamSizePreset,
 			webcamPosition,
+			webcamShadowPreset = "soft",
+			webcamVisible = true,
+			webcamOpacity = 1,
+			webcamScale = 1,
 			onWebcamPositionChange,
 			onWebcamPositionDragEnd,
+			onResolvedWebcamPositionChange,
 			onDurationChange,
 			onTimeUpdate,
 			currentTime,
@@ -304,7 +318,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				lockedVideoDimensions: lockedVideoDimensionsRef.current,
 				borderRadius,
 				padding,
-				webcamDimensions,
+				webcamDimensions: webcamVisible ? webcamDimensions : null,
 				webcamLayoutPreset,
 				webcamSizePreset,
 				webcamPosition,
@@ -337,6 +351,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			borderRadius,
 			padding,
 			webcamDimensions,
+			webcamVisible,
 			webcamLayoutPreset,
 			webcamSizePreset,
 			webcamPosition,
@@ -1120,9 +1135,77 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
 		const [resolvedWallpaper, setResolvedWallpaper] = useState<string | null>(null);
 		const webcamCssBoxShadow = useMemo(
-			() => getWebcamLayoutCssBoxShadow(webcamLayoutPreset),
-			[webcamLayoutPreset],
+			() => getWebcamShadowCssBoxShadow(webcamShadowPreset),
+			[webcamShadowPreset],
 		);
+		const webcamBorderOverlay = useMemo(() => {
+			if (!webcamLayout || webcamBorderWidth <= 0) return null;
+
+			const strokeWidth = Math.min(
+				webcamBorderWidth,
+				Math.max(0, Math.min(webcamLayout.width, webcamLayout.height) / 2 - 0.5),
+			);
+			if (strokeWidth <= 0) return null;
+
+			const inset = strokeWidth / 2;
+			const rx = Math.max(0, webcamLayout.borderRadius - inset);
+			const shape = webcamLayout.maskShape ?? webcamMaskShape ?? "rectangle";
+
+			return (
+				<svg
+					className="absolute inset-0 pointer-events-none"
+					width={webcamLayout.width}
+					height={webcamLayout.height}
+					viewBox={`0 0 ${webcamLayout.width} ${webcamLayout.height}`}
+					fill="none"
+					aria-hidden="true"
+				>
+					{shape === "circle" ? (
+						<circle
+							cx={webcamLayout.width / 2}
+							cy={webcamLayout.height / 2}
+							r={Math.max(0, Math.min(webcamLayout.width, webcamLayout.height) / 2 - inset)}
+							stroke={webcamBorderColor}
+							strokeWidth={strokeWidth}
+						/>
+					) : (
+						<rect
+							x={inset}
+							y={inset}
+							width={Math.max(0, webcamLayout.width - strokeWidth)}
+							height={Math.max(0, webcamLayout.height - strokeWidth)}
+							rx={rx}
+							ry={rx}
+							stroke={webcamBorderColor}
+							strokeWidth={strokeWidth}
+						/>
+					)}
+				</svg>
+			);
+		}, [webcamBorderColor, webcamBorderWidth, webcamLayout, webcamMaskShape]);
+
+		useEffect(() => {
+			const container = containerRef.current;
+			if (!container || !onResolvedWebcamPositionChange) {
+				return;
+			}
+
+			if (!webcamLayout || !webcamVisible) {
+				onResolvedWebcamPositionChange(null);
+				return;
+			}
+
+			const width = container.clientWidth;
+			const height = container.clientHeight;
+			if (!width || !height) {
+				return;
+			}
+
+			onResolvedWebcamPositionChange({
+				cx: (webcamLayout.x + webcamLayout.width / 2) / width,
+				cy: (webcamLayout.y + webcamLayout.height / 2) / height,
+			});
+		}, [onResolvedWebcamPositionChange, webcamLayout, webcamVisible]);
 
 		useEffect(() => {
 			const webcamVideo = webcamVideoRef.current;
@@ -1306,31 +1389,42 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 									width: webcamLayout?.width ?? 0,
 									height: webcamLayout?.height ?? 0,
 									zIndex: 20,
-									opacity: webcamLayout ? 1 : 0,
-									filter:
-										useClipPath && webcamCssBoxShadow !== "none"
-											? `drop-shadow(${webcamCssBoxShadow})`
-											: undefined,
+									opacity: webcamLayout && webcamVisible ? webcamOpacity : 0,
+									transform: `scale(${webcamScale})`,
+									transformOrigin: "center center",
+									pointerEvents: webcamVisible ? "auto" : "none",
+									transition: "opacity 120ms linear, transform 120ms linear",
 								}}
 							>
-								<video
-									ref={webcamVideoRef}
-									src={webcamVideoPath}
-									className={`w-full h-full object-cover ${webcamLayoutPreset === "picture-in-picture" ? "cursor-grab active:cursor-grabbing" : "pointer-events-none"}`}
+								<div
+									className="absolute inset-0"
 									style={{
-										borderRadius: useClipPath ? 0 : (webcamLayout?.borderRadius ?? 0),
-										clipPath: clipPath ?? undefined,
-										boxShadow: useClipPath ? "none" : webcamCssBoxShadow,
-										backgroundColor: "#000",
+										filter:
+											useClipPath && webcamCssBoxShadow !== "none"
+												? `drop-shadow(${webcamCssBoxShadow})`
+												: undefined,
 									}}
-									onPointerDown={handleWebcamPointerDown}
-									onPointerMove={handleWebcamPointerMove}
-									onPointerUp={handleWebcamPointerUp}
-									onPointerLeave={handleWebcamPointerUp}
-									muted
-									preload="metadata"
-									playsInline
-								/>
+								>
+									<video
+										ref={webcamVideoRef}
+										src={webcamVideoPath}
+										className={`w-full h-full object-cover ${webcamLayoutPreset === "picture-in-picture" ? "cursor-grab active:cursor-grabbing" : "pointer-events-none"}`}
+										style={{
+											borderRadius: useClipPath ? 0 : (webcamLayout?.borderRadius ?? 0),
+											clipPath: clipPath ?? undefined,
+											boxShadow: useClipPath ? "none" : webcamCssBoxShadow,
+											backgroundColor: "#000",
+										}}
+										onPointerDown={handleWebcamPointerDown}
+										onPointerMove={handleWebcamPointerMove}
+										onPointerUp={handleWebcamPointerUp}
+										onPointerLeave={handleWebcamPointerUp}
+										muted
+										preload="metadata"
+										playsInline
+									/>
+								</div>
+								{webcamBorderOverlay}
 							</div>
 						);
 					})()}

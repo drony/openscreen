@@ -13,11 +13,21 @@ import type {
 	CropRegion,
 	SpeedRegion,
 	WebcamLayoutPreset,
+	WebcamShadowPreset,
 	WebcamSizePreset,
+	WebcamTrack,
 	ZoomDepth,
 	ZoomRegion,
 } from "@/components/video-editor/types";
-import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
+import {
+	DEFAULT_WEBCAM_BORDER_COLOR,
+	DEFAULT_WEBCAM_BORDER_WIDTH,
+	DEFAULT_WEBCAM_MASK_SHAPE,
+	DEFAULT_WEBCAM_POSITION,
+	DEFAULT_WEBCAM_SHADOW_PRESET,
+	DEFAULT_WEBCAM_SIZE_PRESET,
+	ZOOM_DEPTH_SCALES,
+} from "@/components/video-editor/types";
 import {
 	AUTO_FOLLOW_RAMP_DISTANCE,
 	AUTO_FOLLOW_SMOOTHING_FACTOR,
@@ -40,11 +50,11 @@ import {
 	type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
 import {
-	computeCompositeLayout,
-	getWebcamLayoutPresetDefinition,
-	type Size,
-	type StyledRenderRect,
-} from "@/lib/compositeLayout";
+	getWebcamShadowStyle,
+	type ResolvedWebcamPresentation,
+	resolveWebcamPresentation,
+} from "@/components/video-editor/webcamAutomation";
+import { computeCompositeLayout, type Size, type StyledRenderRect } from "@/lib/compositeLayout";
 import { drawCanvasClipPath } from "@/lib/webcamMaskShapes";
 import { renderAnnotations } from "./annotationRenderer";
 import {
@@ -71,8 +81,12 @@ interface FrameRenderConfig {
 	webcamSize?: Size | null;
 	webcamLayoutPreset?: WebcamLayoutPreset;
 	webcamMaskShape?: import("@/components/video-editor/types").WebcamMaskShape;
+	webcamBorderWidth?: number;
+	webcamBorderColor?: string;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
+	webcamShadowPreset?: WebcamShadowPreset;
+	webcamTrack?: WebcamTrack | null;
 	annotationRegions?: AnnotationRegion[];
 	speedRegions?: SpeedRegion[];
 	previewWidth?: number;
@@ -124,6 +138,18 @@ export class FrameRenderer {
 	private smoothedAutoFocus: { cx: number; cy: number } | null = null;
 	private prevAnimationTimeMs: number | null = null;
 	private prevTargetProgress = 0;
+	private currentResolvedWebcamPresentation: ResolvedWebcamPresentation = resolveWebcamPresentation(
+		0,
+		{
+			position: DEFAULT_WEBCAM_POSITION,
+			sizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
+			borderWidth: DEFAULT_WEBCAM_BORDER_WIDTH,
+			borderColor: DEFAULT_WEBCAM_BORDER_COLOR,
+			maskShape: DEFAULT_WEBCAM_MASK_SHAPE,
+			shadowPreset: DEFAULT_WEBCAM_SHADOW_PRESET,
+		},
+		null,
+	);
 
 	constructor(config: FrameRenderConfig) {
 		this.config = config;
@@ -370,10 +396,23 @@ export class FrameRenderer {
 			oldTexture.destroy(true);
 		}
 
-		// Apply layout
-		this.updateLayout(webcamFrame);
-
 		const timeMs = this.currentVideoTime * 1000;
+		this.currentResolvedWebcamPresentation = resolveWebcamPresentation(
+			timeMs,
+			{
+				position: this.config.webcamPosition ?? DEFAULT_WEBCAM_POSITION,
+				sizePreset: this.config.webcamSizePreset ?? DEFAULT_WEBCAM_SIZE_PRESET,
+				borderWidth: this.config.webcamBorderWidth ?? DEFAULT_WEBCAM_BORDER_WIDTH,
+				borderColor: this.config.webcamBorderColor ?? DEFAULT_WEBCAM_BORDER_COLOR,
+				maskShape: this.config.webcamMaskShape ?? DEFAULT_WEBCAM_MASK_SHAPE,
+				shadowPreset: this.config.webcamShadowPreset ?? DEFAULT_WEBCAM_SHADOW_PRESET,
+			},
+			this.config.webcamTrack,
+		);
+
+		// Apply layout
+		this.updateLayout(webcamFrame, this.currentResolvedWebcamPresentation);
+
 		const TICKS_PER_FRAME = 1;
 
 		let maxMotionIntensity = 0;
@@ -409,7 +448,7 @@ export class FrameRenderer {
 		this.app.renderer.render(this.app.stage);
 
 		// Composite with shadows to final output canvas
-		this.compositeWithShadows(webcamFrame);
+		this.compositeWithShadows(webcamFrame, this.currentResolvedWebcamPresentation);
 
 		// Render annotations on top if present
 		if (
@@ -435,7 +474,10 @@ export class FrameRenderer {
 		}
 	}
 
-	private updateLayout(webcamFrame?: VideoFrame | null): void {
+	private updateLayout(
+		webcamFrame?: VideoFrame | null,
+		webcamPresentation: ResolvedWebcamPresentation = this.currentResolvedWebcamPresentation,
+	): void {
 		if (!this.app || !this.videoSprite || !this.maskGraphics || !this.videoContainer) return;
 
 		const { width, height } = this.config;
@@ -463,11 +505,11 @@ export class FrameRenderer {
 			canvasSize: { width, height },
 			maxContentSize: { width: viewportWidth, height: viewportHeight },
 			screenSize: { width: croppedVideoWidth, height: croppedVideoHeight },
-			webcamSize: webcamFrame ? this.config.webcamSize : null,
+			webcamSize: webcamFrame && webcamPresentation.visible ? this.config.webcamSize : null,
 			layoutPreset: this.config.webcamLayoutPreset,
-			webcamSizePreset: this.config.webcamSizePreset,
-			webcamPosition: this.config.webcamPosition,
-			webcamMaskShape: this.config.webcamMaskShape,
+			webcamSizePreset: webcamPresentation.sizePreset,
+			webcamPosition: webcamPresentation.position,
+			webcamMaskShape: webcamPresentation.maskShape,
 		});
 		if (!compositeLayout) return;
 
@@ -724,7 +766,10 @@ export class FrameRenderer {
 		return this.rasterCanvas;
 	}
 
-	private compositeWithShadows(webcamFrame?: VideoFrame | null): void {
+	private compositeWithShadows(
+		webcamFrame?: VideoFrame | null,
+		webcamPresentation: ResolvedWebcamPresentation = this.currentResolvedWebcamPresentation,
+	): void {
 		if (!this.compositeCanvas || !this.compositeCtx || !this.app) return;
 
 		const videoCanvas = this.readbackVideoCanvas();
@@ -781,36 +826,63 @@ export class FrameRenderer {
 		}
 
 		const webcamRect = this.layoutCache?.webcamRect ?? null;
-		if (webcamFrame && webcamRect) {
-			const preset = getWebcamLayoutPresetDefinition(this.config.webcamLayoutPreset);
-			const shape = webcamRect.maskShape ?? this.config.webcamMaskShape ?? "rectangle";
+		if (webcamFrame && webcamRect && webcamPresentation.visible) {
+			const shape = webcamRect.maskShape ?? webcamPresentation.maskShape;
+			const webcamBorderWidth = Math.max(0, Math.min(webcamPresentation.borderWidth ?? 0, 10));
+			const webcamShadow = getWebcamShadowStyle(webcamPresentation.shadowPreset);
+			const scaledWidth = webcamRect.width * webcamPresentation.scale;
+			const scaledHeight = webcamRect.height * webcamPresentation.scale;
+			const scaledX = webcamRect.x + (webcamRect.width - scaledWidth) / 2;
+			const scaledY = webcamRect.y + (webcamRect.height - scaledHeight) / 2;
+
 			ctx.save();
 			drawCanvasClipPath(
 				ctx,
-				webcamRect.x,
-				webcamRect.y,
-				webcamRect.width,
-				webcamRect.height,
+				scaledX,
+				scaledY,
+				scaledWidth,
+				scaledHeight,
 				shape,
-				webcamRect.borderRadius,
+				webcamRect.borderRadius * webcamPresentation.scale,
 			);
-			if (preset.shadow) {
-				ctx.shadowColor = preset.shadow.color;
-				ctx.shadowBlur = preset.shadow.blur;
-				ctx.shadowOffsetX = preset.shadow.offsetX;
-				ctx.shadowOffsetY = preset.shadow.offsetY;
+			ctx.globalAlpha = webcamPresentation.opacity;
+			if (webcamShadow) {
+				ctx.shadowColor = webcamShadow.color;
+				ctx.shadowBlur = webcamShadow.blur;
+				ctx.shadowOffsetX = webcamShadow.offsetX;
+				ctx.shadowOffsetY = webcamShadow.offsetY;
 			}
 			ctx.fillStyle = "#000000";
 			ctx.fill();
 			ctx.clip();
 			ctx.drawImage(
 				webcamFrame as unknown as CanvasImageSource,
-				webcamRect.x,
-				webcamRect.y,
-				webcamRect.width,
-				webcamRect.height,
+				scaledX,
+				scaledY,
+				scaledWidth,
+				scaledHeight,
 			);
 			ctx.restore();
+
+			if (webcamBorderWidth > 0) {
+				const scaledBorderWidth = webcamBorderWidth * webcamPresentation.scale;
+				const strokeInset = scaledBorderWidth / 2;
+				ctx.save();
+				ctx.globalAlpha = webcamPresentation.opacity;
+				drawCanvasClipPath(
+					ctx,
+					scaledX + strokeInset,
+					scaledY + strokeInset,
+					Math.max(scaledWidth - scaledBorderWidth, 0),
+					Math.max(scaledHeight - scaledBorderWidth, 0),
+					shape,
+					Math.max(webcamRect.borderRadius * webcamPresentation.scale - strokeInset, 0),
+				);
+				ctx.lineWidth = scaledBorderWidth;
+				ctx.strokeStyle = webcamPresentation.borderColor ?? DEFAULT_WEBCAM_BORDER_COLOR;
+				ctx.stroke();
+				ctx.restore();
+			}
 		}
 	}
 

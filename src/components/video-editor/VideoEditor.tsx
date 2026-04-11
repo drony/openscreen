@@ -37,6 +37,7 @@ import {
 	getNativeAspectRatioValue,
 	isPortraitAspectRatio,
 } from "@/utils/aspectRatioUtils";
+import { buildMicrophoneTelemetryFromSource } from "./audioWaveformTelemetry";
 import { ExportDialog } from "./ExportDialog";
 import PlaybackControls from "./PlaybackControls";
 import {
@@ -65,15 +66,35 @@ import {
 	DEFAULT_PLAYBACK_SPEED,
 	DEFAULT_ZOOM_DEPTH,
 	type FigureData,
+	type MicrophoneTelemetryPoint,
 	type PlaybackSpeed,
 	type SpeedRegion,
 	type TrimRegion,
+	type WebcamAutomationValues,
+	type WebcamKeyframe,
+	type WebcamSegment,
+	type WebcamTrack,
 	type ZoomDepth,
 	type ZoomFocus,
 	type ZoomFocusMode,
 	type ZoomRegion,
 } from "./types";
 import VideoPlayback, { VideoPlaybackRef } from "./VideoPlayback";
+import {
+	createDefaultWebcamTrack,
+	createWebcamAutomationValues,
+	DEFAULT_MICROPHONE_VISIBILITY_CONFIG,
+	generateWebcamSegmentsFromMicrophoneTelemetry,
+	normalizeWebcamTrack,
+	resolveWebcamPresentation,
+} from "./webcamAutomation";
+
+const WEBCAM_POSITION_KEYFRAME_TOLERANCE_MS = 120;
+const WEBCAM_SEGMENT_DURATION_MS = 2_500;
+
+function createWebcamEntityId(prefix: "segment" | "keyframe") {
+	return `${prefix}-${crypto.randomUUID()}`;
+}
 
 export default function VideoEditor() {
 	const {
@@ -100,8 +121,12 @@ export default function VideoEditor() {
 		aspectRatio,
 		webcamLayoutPreset,
 		webcamMaskShape,
+		webcamBorderWidth,
+		webcamBorderColor,
 		webcamSizePreset,
 		webcamPosition,
+		webcamShadowPreset,
+		webcamTrack,
 	} = editorState;
 
 	// ── Non-undoable state
@@ -120,11 +145,19 @@ export default function VideoEditor() {
 	const durationRef = useRef(duration);
 	durationRef.current = duration;
 	const [cursorTelemetry, setCursorTelemetry] = useState<CursorTelemetryPoint[]>([]);
+	const [microphoneTelemetry, setMicrophoneTelemetry] = useState<MicrophoneTelemetryPoint[]>([]);
+	const [isMicrophoneTelemetryLoading, setIsMicrophoneTelemetryLoading] = useState(false);
 	const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
 	const [selectedTrimId, setSelectedTrimId] = useState<string | null>(null);
 	const [selectedSpeedId, setSelectedSpeedId] = useState<string | null>(null);
 	const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
 	const [selectedBlurId, setSelectedBlurId] = useState<string | null>(null);
+	const [selectedWebcamSegmentId, setSelectedWebcamSegmentId] = useState<string | null>(null);
+	const [selectedWebcamKeyframeId, setSelectedWebcamKeyframeId] = useState<string | null>(null);
+	const [resolvedWebcamPosition, setResolvedWebcamPosition] = useState<{
+		cx: number;
+		cy: number;
+	} | null>(null);
 	const [isExporting, setIsExporting] = useState(false);
 	const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
 	const [exportError, setExportError] = useState<string | null>(null);
@@ -143,6 +176,9 @@ export default function VideoEditor() {
 		format: string;
 	} | null>(null);
 	const [isFullscreen, setIsFullscreen] = useState(false);
+	const [micAutomationConfig, setMicAutomationConfig] = useState(
+		DEFAULT_MICROPHONE_VISIBILITY_CONFIG,
+	);
 
 	const playerContainerRef = useRef<HTMLDivElement>(null);
 	const videoPlaybackRef = useRef<VideoPlaybackRef>(null);
@@ -181,6 +217,218 @@ export default function VideoEditor() {
 			? { screenVideoPath, webcamVideoPath: webcamSourcePath }
 			: { screenVideoPath };
 	}, [videoPath, videoSourcePath, webcamVideoPath, webcamVideoSourcePath]);
+
+	const currentTimeMs = useMemo(() => Math.round(currentTime * 1000), [currentTime]);
+	const normalizedWebcamTrack = useMemo(() => normalizeWebcamTrack(webcamTrack), [webcamTrack]);
+	const baseWebcamAutomationValues = useMemo(
+		() =>
+			createWebcamAutomationValues({
+				position: webcamPosition,
+				sizePreset: webcamSizePreset,
+				borderWidth: webcamBorderWidth,
+				borderColor: webcamBorderColor,
+				maskShape: webcamMaskShape,
+				shadowPreset: webcamShadowPreset,
+			}),
+		[
+			webcamBorderColor,
+			webcamBorderWidth,
+			webcamMaskShape,
+			webcamPosition,
+			webcamShadowPreset,
+			webcamSizePreset,
+		],
+	);
+	const resolvedWebcamPresentation = useMemo(
+		() =>
+			resolveWebcamPresentation(currentTimeMs, baseWebcamAutomationValues, normalizedWebcamTrack),
+		[currentTimeMs, baseWebcamAutomationValues, normalizedWebcamTrack],
+	);
+	const selectedWebcamKeyframe = useMemo(
+		() =>
+			selectedWebcamKeyframeId
+				? (normalizedWebcamTrack?.keyframes.find(
+						(keyframe) => keyframe.id === selectedWebcamKeyframeId,
+					) ?? null)
+				: null,
+		[normalizedWebcamTrack, selectedWebcamKeyframeId],
+	);
+	const inspectedWebcamValues = useMemo(
+		() =>
+			selectedWebcamKeyframe?.values ??
+			normalizedWebcamTrack?.keyframes.find((keyframe) => keyframe.timeMs === 0)?.values ??
+			baseWebcamAutomationValues,
+		[selectedWebcamKeyframe, normalizedWebcamTrack, baseWebcamAutomationValues],
+	);
+	const toBaseWebcamState = useCallback(
+		(values: WebcamAutomationValues) => ({
+			webcamPosition: values.position,
+			webcamSizePreset: values.sizePreset,
+			webcamBorderWidth: values.borderWidth,
+			webcamBorderColor: values.borderColor,
+			webcamMaskShape: values.maskShape,
+			webcamShadowPreset: values.shadowPreset,
+		}),
+		[],
+	);
+
+	const ensureWebcamTrackInitialized = useCallback(
+		(
+			track: WebcamTrack | null,
+			options?: {
+				explicitBasePosition?: { cx: number; cy: number } | null;
+			},
+		) => {
+			const normalized = normalizeWebcamTrack(track);
+			if (normalized) {
+				return normalized;
+			}
+
+			const durationMs = Math.max(
+				1,
+				Math.round(durationRef.current * 1000) ||
+					Math.round(duration * 1000) ||
+					WEBCAM_SEGMENT_DURATION_MS,
+			);
+
+			return createDefaultWebcamTrack(
+				durationMs,
+				{
+					...baseWebcamAutomationValues,
+					position: options?.explicitBasePosition ?? baseWebcamAutomationValues.position,
+				},
+				createWebcamEntityId,
+			);
+		},
+		[baseWebcamAutomationValues, duration],
+	);
+
+	const updateSelectedOrBaseWebcamKeyframe = useCallback(
+		(
+			updater: (values: WebcamAutomationValues) => WebcamAutomationValues,
+			mode: "push" | "update" = "push",
+		) => {
+			const nextTrack = ensureWebcamTrackInitialized(webcamTrack);
+			const existingIndex = selectedWebcamKeyframeId
+				? nextTrack.keyframes.findIndex((keyframe) => keyframe.id === selectedWebcamKeyframeId)
+				: -1;
+			const targetIndex =
+				existingIndex >= 0
+					? existingIndex
+					: Math.max(
+							0,
+							nextTrack.keyframes.findIndex((keyframe) => keyframe.timeMs === 0),
+						);
+
+			const target = nextTrack.keyframes[targetIndex] ?? {
+				id: createWebcamEntityId("keyframe"),
+				timeMs: 0,
+				values: baseWebcamAutomationValues,
+			};
+			const updatedKeyframe: WebcamKeyframe = {
+				...target,
+				values: createWebcamAutomationValues(updater(target.values)),
+			};
+
+			const keyframes =
+				nextTrack.keyframes[targetIndex] === undefined
+					? [updatedKeyframe, ...nextTrack.keyframes]
+					: nextTrack.keyframes.map((keyframe, index) =>
+							index === targetIndex ? updatedKeyframe : keyframe,
+						);
+			const nextState = { ...nextTrack, keyframes };
+			const shouldSyncBaseState = updatedKeyframe.timeMs === 0 && targetIndex === 0;
+			if (mode === "update") {
+				updateState({
+					webcamTrack: nextState,
+					...(shouldSyncBaseState ? toBaseWebcamState(updatedKeyframe.values) : {}),
+				});
+			} else {
+				pushState({
+					webcamTrack: nextState,
+					...(shouldSyncBaseState ? toBaseWebcamState(updatedKeyframe.values) : {}),
+				});
+			}
+			setSelectedWebcamKeyframeId(updatedKeyframe.id);
+			return updatedKeyframe.id;
+		},
+		[
+			baseWebcamAutomationValues,
+			ensureWebcamTrackInitialized,
+			pushState,
+			selectedWebcamKeyframeId,
+			toBaseWebcamState,
+			updateState,
+			webcamTrack,
+		],
+	);
+
+	const upsertWebcamKeyframeAtCurrentTime = useCallback(
+		(
+			overrides: Partial<WebcamAutomationValues>,
+			mode: "push" | "update" = "push",
+			toleranceMs = WEBCAM_POSITION_KEYFRAME_TOLERANCE_MS,
+		) => {
+			const explicitBasePosition = resolvedWebcamPosition ?? resolvedWebcamPresentation.position;
+			const nextTrack = ensureWebcamTrackInitialized(webcamTrack, { explicitBasePosition });
+			const existingIndex = nextTrack.keyframes.findIndex(
+				(keyframe) => Math.abs(keyframe.timeMs - currentTimeMs) <= toleranceMs,
+			);
+			const snapshotValues = createWebcamAutomationValues({
+				position: resolvedWebcamPresentation.position ?? explicitBasePosition,
+				sizePreset: resolvedWebcamPresentation.sizePreset,
+				borderWidth: resolvedWebcamPresentation.borderWidth,
+				borderColor: resolvedWebcamPresentation.borderColor,
+				maskShape: resolvedWebcamPresentation.maskShape,
+				shadowPreset: resolvedWebcamPresentation.shadowPreset,
+				...overrides,
+			});
+
+			const updatedKeyframe: WebcamKeyframe =
+				existingIndex >= 0
+					? {
+							...nextTrack.keyframes[existingIndex],
+							values: snapshotValues,
+						}
+					: {
+							id: createWebcamEntityId("keyframe"),
+							timeMs: currentTimeMs,
+							values: snapshotValues,
+						};
+			const keyframes =
+				existingIndex >= 0
+					? nextTrack.keyframes.map((keyframe, index) =>
+							index === existingIndex ? updatedKeyframe : keyframe,
+						)
+					: [...nextTrack.keyframes, updatedKeyframe].sort((a, b) => a.timeMs - b.timeMs);
+			const nextState = { ...nextTrack, keyframes };
+			const shouldSyncBaseState = updatedKeyframe.timeMs === 0;
+
+			if (mode === "update") {
+				updateState({
+					webcamTrack: nextState,
+					...(shouldSyncBaseState ? toBaseWebcamState(updatedKeyframe.values) : {}),
+				});
+			} else {
+				pushState({
+					webcamTrack: nextState,
+					...(shouldSyncBaseState ? toBaseWebcamState(updatedKeyframe.values) : {}),
+				});
+			}
+			setSelectedWebcamKeyframeId(updatedKeyframe.id);
+			return updatedKeyframe.id;
+		},
+		[
+			currentTimeMs,
+			ensureWebcamTrackInitialized,
+			pushState,
+			resolvedWebcamPosition,
+			resolvedWebcamPresentation,
+			toBaseWebcamState,
+			updateState,
+			webcamTrack,
+		],
+	);
 
 	const applyLoadedProject = useCallback(
 		async (candidate: unknown, path?: string | null) => {
@@ -228,8 +476,12 @@ export default function VideoEditor() {
 				aspectRatio: normalizedEditor.aspectRatio,
 				webcamLayoutPreset: normalizedEditor.webcamLayoutPreset,
 				webcamMaskShape: normalizedEditor.webcamMaskShape,
+				webcamBorderWidth: normalizedEditor.webcamBorderWidth,
+				webcamBorderColor: normalizedEditor.webcamBorderColor,
 				webcamSizePreset: normalizedEditor.webcamSizePreset,
 				webcamPosition: normalizedEditor.webcamPosition,
+				webcamShadowPreset: normalizedEditor.webcamShadowPreset,
+				webcamTrack: normalizedEditor.webcamTrack,
 			});
 			setExportQuality(normalizedEditor.exportQuality);
 			setExportFormat(normalizedEditor.exportFormat);
@@ -242,6 +494,9 @@ export default function VideoEditor() {
 			setSelectedSpeedId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
+			setResolvedWebcamPosition(null);
 
 			nextZoomIdRef.current = deriveNextId(
 				"zoom",
@@ -297,7 +552,12 @@ export default function VideoEditor() {
 			aspectRatio,
 			webcamLayoutPreset,
 			webcamMaskShape,
+			webcamBorderWidth,
+			webcamBorderColor,
+			webcamSizePreset,
 			webcamPosition,
+			webcamShadowPreset,
+			webcamTrack: normalizedWebcamTrack,
 			exportQuality,
 			exportFormat,
 			gifFrameRate,
@@ -320,8 +580,12 @@ export default function VideoEditor() {
 		aspectRatio,
 		webcamLayoutPreset,
 		webcamMaskShape,
+		webcamBorderWidth,
+		webcamBorderColor,
 		webcamSizePreset,
 		webcamPosition,
+		webcamShadowPreset,
+		normalizedWebcamTrack,
 		exportQuality,
 		exportFormat,
 		gifFrameRate,
@@ -441,8 +705,12 @@ export default function VideoEditor() {
 				aspectRatio,
 				webcamLayoutPreset,
 				webcamMaskShape,
+				webcamBorderWidth,
+				webcamBorderColor,
 				webcamSizePreset,
 				webcamPosition,
+				webcamShadowPreset,
+				webcamTrack: normalizedWebcamTrack,
 				exportQuality,
 				exportFormat,
 				gifFrameRate,
@@ -497,8 +765,12 @@ export default function VideoEditor() {
 			aspectRatio,
 			webcamLayoutPreset,
 			webcamMaskShape,
+			webcamBorderWidth,
+			webcamBorderColor,
 			webcamSizePreset,
 			webcamPosition,
+			webcamShadowPreset,
+			normalizedWebcamTrack,
 			exportQuality,
 			exportFormat,
 			gifFrameRate,
@@ -604,6 +876,64 @@ export default function VideoEditor() {
 		};
 	}, [currentProjectMedia]);
 
+	useEffect(() => {
+		let mounted = true;
+
+		async function loadMicrophoneTelemetry() {
+			const sourcePath = currentProjectMedia?.screenVideoPath ?? null;
+
+			if (!sourcePath) {
+				if (mounted) {
+					setMicrophoneTelemetry([]);
+					setIsMicrophoneTelemetryLoading(false);
+				}
+				return;
+			}
+
+			if (mounted) {
+				setIsMicrophoneTelemetryLoading(true);
+			}
+
+			try {
+				let samples = await buildMicrophoneTelemetryFromSource(sourcePath);
+
+				if (samples.length === 0) {
+					const result = await window.electronAPI.getMicrophoneTelemetry(sourcePath);
+					samples = result.success ? result.samples : [];
+				}
+
+				if (mounted) {
+					setMicrophoneTelemetry(samples);
+				}
+			} catch (telemetryError) {
+				console.warn("Unable to load microphone telemetry:", telemetryError);
+				if (mounted) {
+					try {
+						const result = await window.electronAPI.getMicrophoneTelemetry(sourcePath);
+						if (mounted) {
+							setMicrophoneTelemetry(result.success ? result.samples : []);
+						}
+					} catch (fallbackError) {
+						console.warn("Unable to load microphone telemetry fallback:", fallbackError);
+						if (mounted) {
+							setMicrophoneTelemetry([]);
+						}
+					}
+				}
+			} finally {
+				if (mounted) {
+					setIsMicrophoneTelemetryLoading(false);
+				}
+			}
+		}
+
+		loadMicrophoneTelemetry();
+
+		return () => {
+			mounted = false;
+		};
+	}, [currentProjectMedia]);
+
 	function togglePlayPause() {
 		const playback = videoPlaybackRef.current;
 		const video = playback?.video;
@@ -643,6 +973,9 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		}
 	}, []);
 
@@ -652,6 +985,9 @@ export default function VideoEditor() {
 			setSelectedZoomId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		}
 	}, []);
 
@@ -661,6 +997,9 @@ export default function VideoEditor() {
 			setSelectedZoomId(null);
 			setSelectedTrimId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		}
 	}, []);
 
@@ -671,6 +1010,8 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		}
 	}, []);
 
@@ -689,6 +1030,9 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -708,6 +1052,9 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -725,6 +1072,9 @@ export default function VideoEditor() {
 			setSelectedZoomId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -836,8 +1186,235 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		}
 	}, []);
+
+	const handleSelectWebcamSegment = useCallback((id: string | null) => {
+		setSelectedWebcamSegmentId(id);
+		if (id) {
+			setSelectedZoomId(null);
+			setSelectedTrimId(null);
+			setSelectedAnnotationId(null);
+			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+		}
+	}, []);
+
+	const handleSelectWebcamKeyframe = useCallback((id: string | null) => {
+		setSelectedWebcamKeyframeId(id);
+		if (id) {
+			setSelectedZoomId(null);
+			setSelectedTrimId(null);
+			setSelectedAnnotationId(null);
+			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+		}
+	}, []);
+
+	const handleAddWebcamSegment = useCallback(() => {
+		if (!webcamVideoPath) {
+			return;
+		}
+
+		const durationMs = Math.max(
+			1,
+			Math.round(durationRef.current * 1000) || WEBCAM_SEGMENT_DURATION_MS,
+		);
+		const track = ensureWebcamTrackInitialized(webcamTrack, {
+			explicitBasePosition: resolvedWebcamPosition ?? resolvedWebcamPresentation.position,
+		});
+		const existing = track.segments.find(
+			(segment) => currentTimeMs >= segment.startMs && currentTimeMs <= segment.endMs,
+		);
+		if (existing) {
+			handleSelectWebcamSegment(existing.id);
+			return;
+		}
+
+		const sorted = [...track.segments].sort((a, b) => a.startMs - b.startMs);
+		const startMs = Math.max(0, Math.min(currentTimeMs, Math.max(durationMs - 1, 0)));
+		const nextSegment = sorted.find((segment) => segment.startMs > startMs) ?? null;
+		const gapEnd = nextSegment ? nextSegment.startMs : durationMs;
+		const endMs = Math.min(gapEnd, startMs + WEBCAM_SEGMENT_DURATION_MS);
+		if (endMs - startMs < 1) {
+			return;
+		}
+
+		const segment: WebcamSegment = {
+			id: createWebcamEntityId("segment"),
+			startMs,
+			endMs,
+		};
+		const nextTrack: WebcamTrack = {
+			...track,
+			segments: [...track.segments, segment].sort((a, b) => a.startMs - b.startMs),
+		};
+		pushState({ webcamTrack: nextTrack });
+		setSelectedWebcamSegmentId(segment.id);
+	}, [
+		currentTimeMs,
+		ensureWebcamTrackInitialized,
+		handleSelectWebcamSegment,
+		pushState,
+		resolvedWebcamPosition,
+		resolvedWebcamPresentation.position,
+		webcamTrack,
+		webcamVideoPath,
+	]);
+
+	const handleWebcamSegmentSpanChange = useCallback(
+		(id: string, span: Span) => {
+			const track = ensureWebcamTrackInitialized(webcamTrack, {
+				explicitBasePosition: resolvedWebcamPosition ?? resolvedWebcamPresentation.position,
+			});
+			pushState({
+				webcamTrack: {
+					...track,
+					segments: track.segments
+						.map((segment) =>
+							segment.id === id
+								? {
+										...segment,
+										startMs: Math.max(0, Math.round(span.start)),
+										endMs: Math.max(Math.round(span.start) + 1, Math.round(span.end)),
+									}
+								: segment,
+						)
+						.sort((a, b) => a.startMs - b.startMs),
+				},
+			});
+		},
+		[
+			ensureWebcamTrackInitialized,
+			pushState,
+			resolvedWebcamPosition,
+			resolvedWebcamPresentation.position,
+			webcamTrack,
+		],
+	);
+
+	const handleWebcamSegmentDelete = useCallback(
+		(id: string) => {
+			if (!normalizedWebcamTrack) {
+				return;
+			}
+			pushState({
+				webcamTrack: {
+					...normalizedWebcamTrack,
+					segments: normalizedWebcamTrack.segments.filter((segment) => segment.id !== id),
+				},
+			});
+			if (selectedWebcamSegmentId === id) {
+				setSelectedWebcamSegmentId(null);
+			}
+		},
+		[normalizedWebcamTrack, pushState, selectedWebcamSegmentId],
+	);
+
+	const handleAddWebcamKeyframe = useCallback(() => {
+		if (!webcamVideoPath) {
+			return;
+		}
+		upsertWebcamKeyframeAtCurrentTime({}, "push", 0);
+	}, [upsertWebcamKeyframeAtCurrentTime, webcamVideoPath]);
+
+	const handleWebcamKeyframeMove = useCallback(
+		(id: string, newTimeMs: number) => {
+			if (!normalizedWebcamTrack) {
+				return;
+			}
+
+			updateState({
+				webcamTrack: {
+					...normalizedWebcamTrack,
+					keyframes: normalizedWebcamTrack.keyframes
+						.map((keyframe) =>
+							keyframe.id === id
+								? {
+										...keyframe,
+										timeMs: Math.max(0, Math.round(newTimeMs)),
+									}
+								: keyframe,
+						)
+						.sort((a, b) => a.timeMs - b.timeMs),
+				},
+			});
+			setSelectedWebcamKeyframeId(id);
+		},
+		[normalizedWebcamTrack, updateState],
+	);
+
+	const handleWebcamKeyframeDelete = useCallback(
+		(id: string) => {
+			if (!normalizedWebcamTrack) {
+				return;
+			}
+			pushState({
+				webcamTrack: {
+					...normalizedWebcamTrack,
+					keyframes: normalizedWebcamTrack.keyframes.filter((keyframe) => keyframe.id !== id),
+				},
+			});
+			if (selectedWebcamKeyframeId === id) {
+				setSelectedWebcamKeyframeId(null);
+			}
+		},
+		[normalizedWebcamTrack, pushState, selectedWebcamKeyframeId],
+	);
+
+	const handleWebcamAnchorSelect = useCallback(
+		(anchor: "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center") => {
+			const positions: Record<typeof anchor, { cx: number; cy: number }> = {
+				"top-left": { cx: 0.18, cy: 0.18 },
+				"top-right": { cx: 0.82, cy: 0.18 },
+				"bottom-left": { cx: 0.18, cy: 0.82 },
+				"bottom-right": { cx: 0.82, cy: 0.82 },
+				center: { cx: 0.5, cy: 0.5 },
+			};
+			upsertWebcamKeyframeAtCurrentTime({ position: positions[anchor] }, "push", 0);
+		},
+		[upsertWebcamKeyframeAtCurrentTime],
+	);
+
+	const handleGenerateWebcamVisibilityFromMic = useCallback(
+		(config: typeof DEFAULT_MICROPHONE_VISIBILITY_CONFIG) => {
+			if (!webcamVideoPath) {
+				return;
+			}
+
+			const durationMs = Math.max(
+				1,
+				Math.round(durationRef.current * 1000) || WEBCAM_SEGMENT_DURATION_MS,
+			);
+			const track = ensureWebcamTrackInitialized(webcamTrack, {
+				explicitBasePosition: resolvedWebcamPosition ?? resolvedWebcamPresentation.position,
+			});
+			const segments = generateWebcamSegmentsFromMicrophoneTelemetry(
+				microphoneTelemetry,
+				durationMs,
+				config,
+				() => createWebcamEntityId("segment"),
+			);
+			pushState({
+				webcamTrack: {
+					...track,
+					segments,
+				},
+			});
+			setSelectedWebcamSegmentId(segments[0]?.id ?? null);
+		},
+		[
+			ensureWebcamTrackInitialized,
+			microphoneTelemetry,
+			pushState,
+			resolvedWebcamPosition,
+			resolvedWebcamPresentation.position,
+			webcamTrack,
+			webcamVideoPath,
+		],
+	);
 
 	const handleSpeedAdded = useCallback(
 		(span: Span) => {
@@ -856,6 +1433,8 @@ export default function VideoEditor() {
 			setSelectedTrimId(null);
 			setSelectedAnnotationId(null);
 			setSelectedBlurId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -923,6 +1502,9 @@ export default function VideoEditor() {
 			setSelectedZoomId(null);
 			setSelectedTrimId(null);
 			setSelectedBlurId(null);
+			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -951,6 +1533,8 @@ export default function VideoEditor() {
 			setSelectedZoomId(null);
 			setSelectedTrimId(null);
 			setSelectedSpeedId(null);
+			setSelectedWebcamSegmentId(null);
+			setSelectedWebcamKeyframeId(null);
 		},
 		[pushState],
 	);
@@ -1236,6 +1820,21 @@ export default function VideoEditor() {
 		}
 	}, [selectedSpeedId, speedRegions]);
 
+	useEffect(() => {
+		if (
+			selectedWebcamSegmentId &&
+			!normalizedWebcamTrack?.segments.some((segment) => segment.id === selectedWebcamSegmentId)
+		) {
+			setSelectedWebcamSegmentId(null);
+		}
+		if (
+			selectedWebcamKeyframeId &&
+			!normalizedWebcamTrack?.keyframes.some((keyframe) => keyframe.id === selectedWebcamKeyframeId)
+		) {
+			setSelectedWebcamKeyframeId(null);
+		}
+	}, [normalizedWebcamTrack, selectedWebcamKeyframeId, selectedWebcamSegmentId]);
+
 	const handleShowExportedFile = useCallback(async (filePath: string) => {
 		try {
 			const result = await window.electronAPI.revealInFolder(filePath);
@@ -1350,8 +1949,12 @@ export default function VideoEditor() {
 						annotationRegions,
 						webcamLayoutPreset,
 						webcamMaskShape,
+						webcamBorderWidth,
+						webcamBorderColor,
 						webcamSizePreset,
 						webcamPosition,
+						webcamShadowPreset,
+						webcamTrack: normalizedWebcamTrack,
 						previewWidth,
 						previewHeight,
 						cursorTelemetry,
@@ -1484,8 +2087,12 @@ export default function VideoEditor() {
 						annotationRegions,
 						webcamLayoutPreset,
 						webcamMaskShape,
+						webcamBorderWidth,
+						webcamBorderColor,
 						webcamSizePreset,
 						webcamPosition,
+						webcamShadowPreset,
+						webcamTrack: normalizedWebcamTrack,
 						previewWidth,
 						previewHeight,
 						cursorTelemetry,
@@ -1555,8 +2162,12 @@ export default function VideoEditor() {
 			aspectRatio,
 			webcamLayoutPreset,
 			webcamMaskShape,
+			webcamBorderWidth,
+			webcamBorderColor,
 			webcamSizePreset,
 			webcamPosition,
+			webcamShadowPreset,
+			normalizedWebcamTrack,
 			exportQuality,
 			handleExportSaved,
 			cursorTelemetry,
@@ -1777,10 +2388,19 @@ export default function VideoEditor() {
 											videoPath={videoPath || ""}
 											webcamVideoPath={webcamVideoPath || undefined}
 											webcamLayoutPreset={webcamLayoutPreset}
-											webcamMaskShape={webcamMaskShape}
-											webcamSizePreset={webcamSizePreset}
-											webcamPosition={webcamPosition}
-											onWebcamPositionChange={(pos) => updateState({ webcamPosition: pos })}
+											webcamMaskShape={resolvedWebcamPresentation.maskShape}
+											webcamBorderWidth={resolvedWebcamPresentation.borderWidth}
+											webcamBorderColor={resolvedWebcamPresentation.borderColor}
+											webcamSizePreset={resolvedWebcamPresentation.sizePreset}
+											webcamPosition={resolvedWebcamPresentation.position}
+											webcamShadowPreset={resolvedWebcamPresentation.shadowPreset}
+											webcamVisible={resolvedWebcamPresentation.visible}
+											webcamOpacity={resolvedWebcamPresentation.opacity}
+											webcamScale={resolvedWebcamPresentation.scale}
+											onResolvedWebcamPositionChange={setResolvedWebcamPosition}
+											onWebcamPositionChange={(pos) =>
+												upsertWebcamKeyframeAtCurrentTime({ position: pos }, "update")
+											}
 											onWebcamPositionDragEnd={commitState}
 											onDurationChange={setDuration}
 											onTimeUpdate={setCurrentTime}
@@ -1867,6 +2487,25 @@ export default function VideoEditor() {
 									onSpeedDelete={handleSpeedDelete}
 									selectedSpeedId={selectedSpeedId}
 									onSelectSpeed={handleSelectSpeed}
+									hasWebcam={Boolean(webcamVideoPath)}
+									webcamSegments={normalizedWebcamTrack?.segments ?? []}
+									webcamKeyframes={normalizedWebcamTrack?.keyframes ?? []}
+									selectedWebcamSegmentId={selectedWebcamSegmentId}
+									selectedWebcamKeyframeId={selectedWebcamKeyframeId}
+									onWebcamAdded={handleAddWebcamSegment}
+									onWebcamSpanChange={handleWebcamSegmentSpanChange}
+									onWebcamDelete={handleWebcamSegmentDelete}
+									onSelectWebcam={handleSelectWebcamSegment}
+									onAddWebcamKeyframe={handleAddWebcamKeyframe}
+									onWebcamKeyframeMove={handleWebcamKeyframeMove}
+									onWebcamKeyframeMoveEnd={commitState}
+									onSelectWebcamKeyframe={handleSelectWebcamKeyframe}
+									onDeleteWebcamKeyframe={handleWebcamKeyframeDelete}
+									hasMicrophoneTelemetry={microphoneTelemetry.length > 0}
+									isMicrophoneTelemetryLoading={isMicrophoneTelemetryLoading}
+									onGenerateWebcamVisibilityFromMic={() =>
+										handleGenerateWebcamVisibilityFromMic(micAutomationConfig)
+									}
 									annotationRegions={annotationOnlyRegions}
 									onAnnotationAdded={handleAnnotationAdded}
 									onAnnotationSpanChange={handleAnnotationSpanChange}
@@ -1940,11 +2579,79 @@ export default function VideoEditor() {
 								webcamPosition: preset === "vertical-stack" ? null : webcamPosition,
 							})
 						}
-						webcamMaskShape={webcamMaskShape}
-						onWebcamMaskShapeChange={(shape) => pushState({ webcamMaskShape: shape })}
-						webcamSizePreset={webcamSizePreset}
-						onWebcamSizePresetChange={(v) => updateState({ webcamSizePreset: v })}
+						webcamMaskShape={inspectedWebcamValues.maskShape}
+						onWebcamMaskShapeChange={(shape) =>
+							updateSelectedOrBaseWebcamKeyframe((values) => ({
+								...values,
+								maskShape: shape,
+							}))
+						}
+						webcamBorderWidth={inspectedWebcamValues.borderWidth}
+						onWebcamBorderWidthChange={(v) =>
+							updateSelectedOrBaseWebcamKeyframe(
+								(values) => ({
+									...values,
+									borderWidth: v,
+								}),
+								"update",
+							)
+						}
+						onWebcamBorderWidthCommit={commitState}
+						webcamBorderColor={inspectedWebcamValues.borderColor}
+						onWebcamBorderColorChange={(value) =>
+							updateSelectedOrBaseWebcamKeyframe((values) => ({
+								...values,
+								borderColor: value.toLowerCase(),
+							}))
+						}
+						webcamSizePreset={inspectedWebcamValues.sizePreset}
+						onWebcamSizePresetChange={(v) =>
+							updateSelectedOrBaseWebcamKeyframe(
+								(values) => ({
+									...values,
+									sizePreset: v,
+								}),
+								"update",
+							)
+						}
 						onWebcamSizePresetCommit={commitState}
+						webcamShadowPreset={inspectedWebcamValues.shadowPreset}
+						onWebcamShadowPresetChange={(preset) =>
+							updateSelectedOrBaseWebcamKeyframe((values) => ({
+								...values,
+								shadowPreset: preset,
+							}))
+						}
+						webcamTrack={normalizedWebcamTrack}
+						selectedWebcamSegmentId={selectedWebcamSegmentId}
+						selectedWebcamKeyframeId={selectedWebcamKeyframeId}
+						hasMicrophoneTelemetry={microphoneTelemetry.length > 0}
+						isMicrophoneTelemetryLoading={isMicrophoneTelemetryLoading}
+						micAutomationConfig={micAutomationConfig}
+						onMicAutomationConfigChange={setMicAutomationConfig}
+						onWebcamAnchorSelect={handleWebcamAnchorSelect}
+						onWebcamEnterAnimationChange={(animation) =>
+							pushState({
+								webcamTrack: {
+									...ensureWebcamTrackInitialized(webcamTrack, {
+										explicitBasePosition:
+											resolvedWebcamPosition ?? resolvedWebcamPresentation.position,
+									}),
+									enterAnimation: animation,
+								},
+							})
+						}
+						onWebcamExitAnimationChange={(animation) =>
+							pushState({
+								webcamTrack: {
+									...ensureWebcamTrackInitialized(webcamTrack, {
+										explicitBasePosition:
+											resolvedWebcamPosition ?? resolvedWebcamPresentation.position,
+									}),
+									exitAnimation: animation,
+								},
+							})
+						}
 						videoElement={videoPlaybackRef.current?.video || null}
 						exportQuality={exportQuality}
 						onExportQualityChange={setExportQuality}

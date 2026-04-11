@@ -15,6 +15,11 @@ interface CursorTelemetryPoint {
 	cy: number;
 }
 
+interface MicrophoneTelemetryPoint {
+	timeMs: number;
+	level: number;
+}
+
 interface Window {
 	electronAPI: {
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
@@ -60,6 +65,12 @@ interface Window {
 		getCursorTelemetry: (videoPath?: string) => Promise<{
 			success: boolean;
 			samples: CursorTelemetryPoint[];
+			message?: string;
+			error?: string;
+		}>;
+		getMicrophoneTelemetry: (videoPath?: string) => Promise<{
+			success: boolean;
+			samples: MicrophoneTelemetryPoint[];
 			message?: string;
 			error?: string;
 		}>;

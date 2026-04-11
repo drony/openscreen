@@ -1,6 +1,7 @@
 import { fixWebmDuration } from "@fix-webm-duration/fix";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import type { MicrophoneTelemetryPoint } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
@@ -35,6 +36,8 @@ const AUDIO_BITRATE_VOICE = 128_000;
 const AUDIO_BITRATE_SYSTEM = 192_000;
 
 const MIC_GAIN_BOOST = 1.4;
+const MIC_TELEMETRY_SAMPLE_INTERVAL_MS = 100;
+const MAX_MICROPHONE_TELEMETRY_SAMPLES = 60 * 60 * 10; // 1 hour @ 10Hz
 const WEBCAM_TARGET_WIDTH = 1280;
 const WEBCAM_TARGET_HEIGHT = 720;
 const WEBCAM_TARGET_FRAME_RATE = 30;
@@ -103,6 +106,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const microphoneStream = useRef<MediaStream | null>(null);
 	const webcamStream = useRef<MediaStream | null>(null);
 	const mixingContext = useRef<AudioContext | null>(null);
+	const microphoneTelemetry = useRef<MicrophoneTelemetryPoint[]>([]);
+	const microphoneTelemetryContext = useRef<AudioContext | null>(null);
+	const microphoneTelemetryAnalyser = useRef<AnalyserNode | null>(null);
+	const microphoneTelemetryInterval = useRef<number | null>(null);
 	const recordingId = useRef<number>(0);
 	const accumulatedDurationMs = useRef(0);
 	const segmentStartedAt = useRef<number | null>(null);
@@ -116,6 +123,74 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			segmentStartedAt.current === null ? 0 : Date.now() - segmentStartedAt.current;
 		return accumulatedDurationMs.current + segmentDuration;
 	}, []);
+
+	const stopMicrophoneTelemetry = useCallback(() => {
+		if (microphoneTelemetryInterval.current !== null) {
+			window.clearInterval(microphoneTelemetryInterval.current);
+			microphoneTelemetryInterval.current = null;
+		}
+		if (microphoneTelemetryContext.current) {
+			void microphoneTelemetryContext.current.close().catch(() => {
+				// Ignore teardown errors for microphone telemetry.
+			});
+			microphoneTelemetryContext.current = null;
+		}
+		microphoneTelemetryAnalyser.current = null;
+	}, []);
+
+	const startMicrophoneTelemetry = useCallback(
+		async (streamForTelemetry: MediaStream | null) => {
+			stopMicrophoneTelemetry();
+			if (!streamForTelemetry) {
+				return;
+			}
+
+			try {
+				const context = new AudioContext();
+				if (context.state === "suspended") {
+					await context.resume();
+				}
+
+				const analyser = context.createAnalyser();
+				analyser.fftSize = 256;
+				analyser.smoothingTimeConstant = 0.6;
+				const source = context.createMediaStreamSource(streamForTelemetry);
+				source.connect(analyser);
+
+				const data = new Uint8Array(analyser.fftSize);
+				microphoneTelemetryContext.current = context;
+				microphoneTelemetryAnalyser.current = analyser;
+
+				microphoneTelemetryInterval.current = window.setInterval(() => {
+					if (!microphoneTelemetryAnalyser.current || segmentStartedAt.current === null) {
+						return;
+					}
+
+					microphoneTelemetryAnalyser.current.getByteTimeDomainData(data);
+					let sum = 0;
+					for (let i = 0; i < data.length; i++) {
+						const normalized = (data[i] - 128) / 128;
+						sum += normalized * normalized;
+					}
+					const rms = Math.sqrt(sum / data.length);
+					const level = Math.min(100, rms * 100 * 2.4);
+
+					microphoneTelemetry.current.push({
+						timeMs: Math.max(0, Math.round(getRecordingDurationMs())),
+						level,
+					});
+
+					if (microphoneTelemetry.current.length > MAX_MICROPHONE_TELEMETRY_SAMPLES) {
+						microphoneTelemetry.current.shift();
+					}
+				}, MIC_TELEMETRY_SAMPLE_INTERVAL_MS);
+			} catch (error) {
+				console.warn("Failed to start microphone telemetry:", error);
+				stopMicrophoneTelemetry();
+			}
+		},
+		[getRecordingDurationMs, stopMicrophoneTelemetry],
+	);
 
 	const selectMimeType = () => {
 		const preferred = [
@@ -146,6 +221,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	};
 
 	const teardownMedia = useCallback(() => {
+		stopMicrophoneTelemetry();
 		if (stream.current) {
 			stream.current.getTracks().forEach((track) => track.stop());
 			stream.current = null;
@@ -168,7 +244,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			});
 			mixingContext.current = null;
 		}
-	}, []);
+		microphoneTelemetry.current = [];
+	}, [stopMicrophoneTelemetry]);
 
 	const setWebcamEnabled = useCallback(
 		async (enabled: boolean) => {
@@ -205,6 +282,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 			finalizingRecordingId.current = activeRecordingId;
+			const microphoneTelemetrySamples = [...microphoneTelemetry.current];
 
 			if (screenRecorder.current === activeScreenRecorder) {
 				screenRecorder.current = null;
@@ -253,6 +331,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 									fileName: webcamFileName,
 								}
 							: undefined,
+						microphoneTelemetry: microphoneTelemetrySamples,
 						createdAt: activeRecordingId,
 					});
 
@@ -464,6 +543,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					toast.error(t("recording.cameraDenied"));
 				}
 			}
+
+			microphoneTelemetry.current = [];
+			await startMicrophoneTelemetry(microphoneStream.current);
 
 			stream.current = new MediaStream();
 			const videoTrack = screenMediaStream.getVideoTracks()[0];

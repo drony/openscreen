@@ -284,6 +284,31 @@ async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
 	}
 	pendingCursorSamples = [];
 
+	if (Array.isArray(payload.microphoneTelemetry) && payload.microphoneTelemetry.length > 0) {
+		const microphoneTelemetryPath = `${screenVideoPath}.mic.json`;
+		const microphoneSamples = payload.microphoneTelemetry
+			.filter((sample) => Boolean(sample && typeof sample === "object"))
+			.map((sample) => ({
+				timeMs:
+					typeof sample.timeMs === "number" && Number.isFinite(sample.timeMs)
+						? Math.max(0, Math.round(sample.timeMs))
+						: 0,
+				level:
+					typeof sample.level === "number" && Number.isFinite(sample.level)
+						? clamp(sample.level, 0, 100)
+						: 0,
+			}))
+			.sort((a, b) => a.timeMs - b.timeMs);
+
+		if (microphoneSamples.length > 0) {
+			await fs.writeFile(
+				microphoneTelemetryPath,
+				JSON.stringify({ version: 1, samples: microphoneSamples }, null, 2),
+				"utf-8",
+			);
+		}
+	}
+
 	const sessionManifestPath = path.join(
 		RECORDINGS_DIR,
 		`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
@@ -306,6 +331,11 @@ interface CursorTelemetryPoint {
 	timeMs: number;
 	cx: number;
 	cy: number;
+}
+
+interface MicrophoneTelemetryPoint {
+	timeMs: number;
+	level: number;
 }
 
 let cursorCaptureInterval: NodeJS.Timeout | null = null;
@@ -608,6 +638,65 @@ export function registerIpcHandlers(
 			return {
 				success: false,
 				message: "Failed to load cursor telemetry",
+				error: String(error),
+				samples: [],
+			};
+		}
+	});
+
+	ipcMain.handle("get-microphone-telemetry", async (_, videoPath?: string) => {
+		const targetVideoPath = normalizeVideoSourcePath(
+			videoPath ?? currentRecordingSession?.screenVideoPath,
+		);
+		if (!targetVideoPath) {
+			return { success: true, samples: [] };
+		}
+
+		if (!isPathAllowed(targetVideoPath)) {
+			console.warn(
+				"[get-microphone-telemetry] Rejected path outside allowed directories:",
+				targetVideoPath,
+			);
+			return { success: true, samples: [] };
+		}
+
+		const telemetryPath = `${targetVideoPath}.mic.json`;
+		try {
+			const content = await fs.readFile(telemetryPath, "utf-8");
+			const parsed = JSON.parse(content);
+			const rawSamples = Array.isArray(parsed)
+				? parsed
+				: Array.isArray(parsed?.samples)
+					? parsed.samples
+					: [];
+
+			const samples: MicrophoneTelemetryPoint[] = rawSamples
+				.filter((sample: unknown) => Boolean(sample && typeof sample === "object"))
+				.map((sample: unknown) => {
+					const point = sample as Partial<MicrophoneTelemetryPoint>;
+					return {
+						timeMs:
+							typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
+								? Math.max(0, point.timeMs)
+								: 0,
+						level:
+							typeof point.level === "number" && Number.isFinite(point.level)
+								? clamp(point.level, 0, 100)
+								: 0,
+					};
+				})
+				.sort((a: MicrophoneTelemetryPoint, b: MicrophoneTelemetryPoint) => a.timeMs - b.timeMs);
+
+			return { success: true, samples };
+		} catch (error) {
+			const nodeError = error as NodeJS.ErrnoException;
+			if (nodeError.code === "ENOENT") {
+				return { success: true, samples: [] };
+			}
+			console.error("Failed to load microphone telemetry:", error);
+			return {
+				success: false,
+				message: "Failed to load microphone telemetry",
 				error: String(error),
 				samples: [],
 			};

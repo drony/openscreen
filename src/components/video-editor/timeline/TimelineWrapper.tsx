@@ -21,7 +21,7 @@ interface TimelineWrapperProps {
 	minVisibleRangeMs: number;
 	gridSizeMs?: number;
 	onItemSpanChange: (id: string, span: Span) => void;
-	allRegionSpans?: { id: string; start: number; end: number }[];
+	allRegionSpans?: { id: string; rowId: string; start: number; end: number }[];
 }
 
 export default function TimelineWrapper({
@@ -97,7 +97,10 @@ export default function TimelineWrapper({
 	// When a span overlaps neighbours, clamp it to the nearest boundary
 	const clampToNeighbours = useCallback(
 		(span: Span, activeItemId: string): Span => {
-			const siblings = allRegionSpans.filter((r) => r.id !== activeItemId);
+			const activeRowId = allRegionSpans.find((region) => region.id === activeItemId)?.rowId;
+			const siblings = allRegionSpans.filter(
+				(r) => r.id !== activeItemId && (!activeRowId || r.rowId === activeRowId),
+			);
 			let { start, end } = span;
 
 			for (const r of siblings) {
